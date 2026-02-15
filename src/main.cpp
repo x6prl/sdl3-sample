@@ -169,15 +169,21 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
 	};
 	*appstate = state;
 
-	// load app_hotreload
-	#if HOTRELOAD
-		if (!hotreload(state)) {
-			SDL_LogError(SDL_LOG_CATEGORY_CUSTOM,
-			             "Failed to load hotreload module from %s",
-			             HOTRELOAD_MODULE_PATH);
-			return SDL_APP_FAILURE;
-		}
-	#endif
+// load app_hotreload
+#if HOTRELOAD
+#if __ANDROID__
+	constexpr const char kAndroidPackagedModuleName[] = "libapp_hotreload.so";
+	const char *initial_hotreload_path = kAndroidPackagedModuleName;
+#else
+	const char *initial_hotreload_path = HOTRELOAD_MODULE_PATH;
+#endif
+	if (!hotreload(initial_hotreload_path)) {
+		SDL_LogError(SDL_LOG_CATEGORY_CUSTOM,
+		             "Failed to load hotreload module from %s",
+		             initial_hotreload_path);
+		return SDL_APP_FAILURE;
+	}
+#endif
 
 	SDL_SetRenderVSync(renderer, -1); // enable vysnc
 
@@ -187,10 +193,13 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
 	ImGuiIO &io = ImGui::GetIO();
 	io.ConfigFlags |=
 		  ImGuiConfigFlags_NavEnableKeyboard; // Enable Keyboard Controls
+	size_t font_file_size = 0;
+	void *font_file_data = SDL_LoadFile(fontPath.c_str(), &font_file_size);
+	io.Fonts->AddFontFromMemoryTTF(font_file_data,font_file_size);
 
 	ImGui::StyleColorsLight();
 
-#if defined(__ANDROID__) || defined (__APPLE__) && TARGET_OS_IPHONE == 1
+#if defined(__ANDROID__) || defined(__APPLE__) && TARGET_OS_IPHONE == 1
 	// --- MOBILE SCALING MAGIC ---
 	// Mobile screens have high DPI. We need to scale everything up.
 	// In a real app, you would load a TTF font at a large size (e.g., 48px).
@@ -221,7 +230,7 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 	auto *app = (AppContext *)appstate;
 #if HOTRELOAD
 	if (SDL_EVENT_USER == event->type) {
-		if (!hotreload(app)) {
+		if (!hotreload(HOTRELOAD_MODULE_PATH)) {
 			SDL_Log("Failed to reload app_hotreload from %s",
 			        HOTRELOAD_MODULE_PATH);
 			// return SDL_APP_CONTINUE;
@@ -243,7 +252,7 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 void SDL_AppQuit(void *appstate, SDL_AppResult result) {
 	auto *app = (AppContext *)appstate;
 	// OS will destroy everything itself on exit
-	
+
 	// if (app) {
 	//   SDL_DestroyRenderer(app->renderer);
 	//   SDL_DestroyWindow(app->window);
