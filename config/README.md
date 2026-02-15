@@ -16,3 +16,7 @@ For the most part, just run the scripts in this directory from this directory.
  	2. Copy `build.gradle` to `SDL/android-project/app/`. If you look inside `build.gradle`, you'll see `"../../../CMakeLists.txt"` as the path to the CMakeLists file. This points to the CMakeLists in this repo's root directory after it is copied. 
   	3. `cd SDL/android-project/`
   	4. `./gradlew assembleDebug`. You'll get an apk which you can then install onto a device. 
+	- For hotreload updates without reinstalling APK:
+	1. Keep the app running on device.
+	2. Run `./config/android-push-hotreload.sh --abi arm64-v8a`
+	3. This rebuilds `libapp_hotreload.so` and copies it to `/data/user/0/org.libsdl.app/files/libapp_hotreload.so` via `adb` + `run-as`.

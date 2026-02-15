@@ -5,7 +5,7 @@ cmake_minimum_required(VERSION 3.16)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/$<CONFIGURATION>")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/$<CONFIGURATION>")
 
-# prevent installing to system directories. 
+# prevent installing to system directories.
 set(CMAKE_INSTALL_PREFIX "${CMAKE_BINARY_DIR}" CACHE INTERNAL "")
 
 # Declare the project
@@ -16,6 +16,17 @@ if ((APPLE AND NOT CMAKE_SYSTEM_NAME MATCHES "Darwin") OR EMSCRIPTEN)
     set(SDL_SHARED OFF)
 else()
     set(SDL_SHARED ON)
+endif()
+
+# Hotreload is only supported for Linux and Android builds.
+option(ENABLE_HOTRELOAD "Enable Debug hotreload where supported" ON)
+set(HOTRELOAD_SUPPORTED_PLATFORM OFF)
+if ((CMAKE_SYSTEM_NAME STREQUAL "Linux" OR ANDROID) AND NOT EMSCRIPTEN)
+    set(HOTRELOAD_SUPPORTED_PLATFORM ON)
+endif()
+set(USE_HOTRELOAD OFF)
+if (ENABLE_HOTRELOAD AND HOTRELOAD_SUPPORTED_PLATFORM)
+    set(USE_HOTRELOAD ON)
 endif()
 
 if(MSVC)
@@ -29,24 +40,108 @@ set(EXECUTABLE_NAME ${PROJECT_NAME})
 
 # Create an executable or a shared library based on the platform and add our sources to it
 if (ANDROID)
-	# The SDL java code is hardcoded to load libmain.so on android, so we need to change EXECUTABLE_NAME
-	set(EXECUTABLE_NAME main)
-	add_library(${EXECUTABLE_NAME} SHARED)
+    # The SDL java code is hardcoded to load libmain.so on android, so we need to change EXECUTABLE_NAME
+    set(EXECUTABLE_NAME main)
+    add_library(${EXECUTABLE_NAME} SHARED)
 else()
-	add_executable(${EXECUTABLE_NAME})
+    add_executable(${EXECUTABLE_NAME})
+endif()
+
+# Dear ImGui sources
+file(GLOB DEAR_IMGUI_SRC
+    src/imgui/imgui.cpp
+    src/imgui/imgui_draw.cpp
+    src/imgui/imgui_widgets.cpp
+    src/imgui/imgui_tables.cpp
+    src/imgui/backends/imgui_impl_sdl3.cpp
+    src/imgui/backends/imgui_impl_sdlrenderer3.cpp
+)
+
+# Hot-reloadable sources
+file(GLOB APP_HOTRELOAD_FILES
+    src/ui/*.cpp
+)
+
+target_compile_definitions(${EXECUTABLE_NAME}
+PRIVATE
+    $<$<AND:$<BOOL:${USE_HOTRELOAD}>,$<CONFIG:Debug>>:HOTRELOAD=1>
+)
+if(ANDROID)
+    target_compile_definitions(${EXECUTABLE_NAME}
+    PRIVATE
+        $<$<AND:$<BOOL:${USE_HOTRELOAD}>,$<CONFIG:Debug>>:HOTRELOAD_MODULE_PATH=\"/data/user/0/org.libsdl.app/files/libapp_hotreload.so\">
+    )
+endif()
+
+# Dear ImGui as a static library (always available for non-hotreload paths).
+add_library(imgui_static STATIC
+    ${DEAR_IMGUI_SRC}
+)
+target_include_directories(imgui_static PRIVATE src/imgui)
+target_include_directories(imgui_static PRIVATE SDL/include)
+
+if(USE_HOTRELOAD)
+    add_library(app_hotreload SHARED
+        ${APP_HOTRELOAD_FILES}
+    )
+    target_compile_definitions(app_hotreload PRIVATE
+        $<$<CONFIG:Debug>:HOTRELOAD=1>
+    )
+    target_include_directories(app_hotreload PRIVATE SDL/include)
+    target_include_directories(app_hotreload PRIVATE SDL_mixer/include)
+    target_include_directories(app_hotreload PRIVATE SDL_image/include)
+    target_include_directories(app_hotreload PRIVATE SDL_ttf/include)
+    target_include_directories(app_hotreload PRIVATE src/imgui)
+    target_include_directories(app_hotreload PRIVATE src/imgui/backends)
+    # target_link_libraries(${EXECUTABLE_NAME} PUBLIC
+    #     app_hotreload
+    # )
+    add_library(imgui_shared SHARED
+        ${DEAR_IMGUI_SRC}
+    )
+    target_include_directories(imgui_shared PRIVATE src/imgui)
+    target_include_directories(imgui_shared PRIVATE SDL/include)
+    target_link_libraries(app_hotreload PUBLIC imgui_shared)
+
+    # Use static UI path outside Debug builds even on hotreload-capable platforms.
+    target_sources(${EXECUTABLE_NAME}
+    PRIVATE
+        $<$<NOT:$<CONFIG:Debug>>:${APP_HOTRELOAD_FILES}>
+    )
+else()
+    # No hotreload support on this platform: always compile UI directly in main target.
+    target_sources(${EXECUTABLE_NAME}
+    PRIVATE
+        ${APP_HOTRELOAD_FILES}
+    )
+endif()
+
+# target_include_directories(imgui PRIVATE src/imgui)
+# target_include_directories(imgui PRIVATE SDL/include)
+
+target_include_directories(${EXECUTABLE_NAME} PRIVATE src/imgui)
+target_include_directories(${EXECUTABLE_NAME} PRIVATE src/imgui/backends)
+if(USE_HOTRELOAD)
+    target_link_libraries(${EXECUTABLE_NAME} PRIVATE
+      $<$<CONFIG:Debug>:imgui_shared>
+      $<$<NOT:$<CONFIG:Debug>>:imgui_static>
+    )
+else()
+    target_link_libraries(${EXECUTABLE_NAME} PRIVATE imgui_static)
 endif()
 
 # Add your sources to the target
-target_sources(${EXECUTABLE_NAME} 
-PRIVATE 
+target_sources(${EXECUTABLE_NAME}
+PRIVATE
     src/main.cpp
     src/iosLaunchScreen.storyboard
 )
+
 # What is iosLaunchScreen.storyboard? This file describes what Apple's mobile platforms
 # should show the user while the application is starting up. If you don't include one,
 # then you get placed in a compatibility mode that does not allow HighDPI.
 # This file is referenced inside Info.plist.in, where it is marked as the launch screen file.
-# It is also ignored on non-Apple platforms. 
+# It is also ignored on non-Apple platforms.
 
 # To get an app icon on Apple platforms, add it to your executable.
 # Afterward, the image file in Info.plist.in.
@@ -57,9 +152,9 @@ endif()
 # Set C++ version
 target_compile_features(${EXECUTABLE_NAME} PUBLIC cxx_std_20)
 
-# on Web targets, we need CMake to generate a HTML webpage. 
+# on Web targets, we need CMake to generate a HTML webpage.
 if(EMSCRIPTEN)
-	set(CMAKE_EXECUTABLE_SUFFIX ".html" CACHE INTERNAL "")
+    set(CMAKE_EXECUTABLE_SUFFIX ".html" CACHE INTERNAL "")
 endif()
 
 # Configure SDL by calling its CMake file.
@@ -69,12 +164,12 @@ add_subdirectory(SDL EXCLUDE_FROM_ALL)
 
 # If you don't want SDL_ttf, then remove this section.
 set(SDLTTF_VENDORED ON) # tell SDL_ttf to build its own dependencies
-add_subdirectory(SDL_ttf EXCLUDE_FROM_ALL)	
+add_subdirectory(SDL_ttf EXCLUDE_FROM_ALL)
 
 # SDL_mixer (used for playing audio)
 set(SDLMIXER_MIDI_NATIVE OFF)     # disable formats we don't use to make the build faster and smaller. Also some of these don't work on all platforms so you'll need to do some experimentation.
 set(SDLMIXER_GME OFF)
-set(SDLMIXER_WAVPACK OFF)     
+set(SDLMIXER_WAVPACK OFF)
 set(SDLMIXER_MOD OFF)
 set(SDLMIXER_MOD_XMP OFF)
 set(SDLMIXER_OPUS OFF)
@@ -93,13 +188,17 @@ set(SDLIMAGE_WEBP OFF)
 set(SDLIMAGE_PNG_LIBPNG OFF)    # SDL3 includes built-in support for loading PNGs. If you need more than what that supports, enable this option.
 add_subdirectory(SDL_image EXCLUDE_FROM_ALL)
 
-# Link SDL to our executable. This also makes its include directory available to us. 
-target_link_libraries(${EXECUTABLE_NAME} PUBLIC 
-	SDL3_ttf::SDL3_ttf      # remove if you are not using SDL_ttf
-	SDL3_mixer::SDL3_mixer  # remove if you are not using SDL_mixer
-	SDL3_image::SDL3_image	# remove if you are not using SDL_image
-    SDL3::SDL3              # If using satelite libraries, SDL must be the last item in the list. 
+# Link SDL to our executable. This also makes its include directory available to us.
+target_link_libraries(${EXECUTABLE_NAME} PUBLIC
+ SDL3_ttf::SDL3_ttf      # remove if you are not using SDL_ttf
+ SDL3_mixer::SDL3_mixer  # remove if you are not using SDL_mixer
+ SDL3_image::SDL3_image	# remove if you are not using SDL_image
+ SDL3::SDL3              # If using satelite libraries, SDL must be the last item in the list.
 )
+if(USE_HOTRELOAD)
+    target_link_libraries(imgui_shared PUBLIC SDL3::SDL3)
+    target_link_libraries(app_hotreload PUBLIC SDL3::SDL3)
+endif()
 
 # Dealing with assets
 # We have some non-code resources that our application needs in order to work. How we deal with those differs per platform.
@@ -119,7 +218,7 @@ if (APPLE)
 elseif(EMSCRIPTEN)
     # on the web, we have to put the files inside of the webassembly
     # somewhat unintuitively, this is done via a linker argument.
-    target_link_libraries(${EXECUTABLE_NAME} PRIVATE 
+    target_link_libraries(${EXECUTABLE_NAME} PRIVATE
         "--preload-file \"${CMAKE_CURRENT_LIST_DIR}/src/Inter-VariableFont.ttf@/\""
         "--preload-file \"${CMAKE_CURRENT_LIST_DIR}/src/the_entertainer.ogg@/\""
         "--preload-file \"${CMAKE_CURRENT_LIST_DIR}/src/gs_tiger.svg@/\""
@@ -132,20 +231,20 @@ else()
         file(MAKE_DIRECTORY "${MOBILE_ASSETS_DIR}")    # we need to create the project Assets dir otherwise CMake won't copy our assets.
     endif()
 
-    
+
     macro(copy_helper filename)
         if (ANDROID)
-            # MOBILE_ASSETS_DIR is set in the gradle file via the cmake command line and points to the Android Studio Assets folder. 
-            # when we copy assets there, the Android build pipeline knows to add them to the apk. 
-            set(outname "${MOBILE_ASSETS_DIR}/${filename}")    
+            # MOBILE_ASSETS_DIR is set in the gradle file via the cmake command line and points to the Android Studio Assets folder.
+            # when we copy assets there, the Android build pipeline knows to add them to the apk.
+            set(outname "${MOBILE_ASSETS_DIR}/${filename}")
         else()
             # for platforms that do not have a good packaging format, all we can do is copy the assets to the process working directory.
             set(outname "${CMAKE_BINARY_DIR}/$<CONFIGURATION>/${filename}")
         endif()
         add_custom_command(POST_BUILD
             TARGET "${EXECUTABLE_NAME}"
-		    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_LIST_DIR}/src/${filename}" "${outname}"
-	    )
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_CURRENT_LIST_DIR}/src/${filename}" "${outname}"
+     )
     endmacro()
     copy_helper("Inter-VariableFont.ttf")
     copy_helper("the_entertainer.ogg")
@@ -158,19 +257,19 @@ if(IOS)
     set(RESOURCE_FILES "src/iosLaunchScreen.storyboard;src/logo.png") # make the splash screen show up on iOS
 endif()
 
-set_target_properties(${EXECUTABLE_NAME} PROPERTIES 
+set_target_properties(${EXECUTABLE_NAME} PROPERTIES
     # On macOS, make a proper .app bundle instead of a bare executable
     MACOSX_BUNDLE TRUE
     # Set the Info.plist file for Apple Mobile platforms. Without this file, your app
-    # will not launch. 
+    # will not launch.
     MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/src/Info.plist.in"
 
     # in Xcode, create a Scheme in the schemes dropdown for the app.
     XCODE_GENERATE_SCHEME TRUE
     # Identification for Xcode
     XCODE_ATTRIBUTE_BUNDLE_IDENTIFIER "com.ravbug.sdl3-sample"
-	XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "com.ravbug.sdl3-sample"
-	XCODE_ATTRIBUTE_CURRENTYEAR "${CURRENTYEAR}"
+ XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "com.ravbug.sdl3-sample"
+ XCODE_ATTRIBUTE_CURRENTYEAR "${CURRENTYEAR}"
     RESOURCE "${RESOURCE_FILES}"
 )
 
@@ -178,20 +277,20 @@ set_target_properties(${EXECUTABLE_NAME} PROPERTIES
 set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT "${EXECUTABLE_NAME}")
 
 # On macOS Platforms, ensure that the bundle is valid for distribution by calling fixup_bundle.
-# note that fixup_bundle does not work on iOS, so you will want to use static libraries 
+# note that fixup_bundle does not work on iOS, so you will want to use static libraries
 # or manually copy dylibs and set rpaths
 if(CMAKE_SYSTEM_NAME MATCHES "Darwin")
     # tell Install about the target, otherwise fixup won't know about the transitive dependencies
     install(TARGETS ${EXECUTABLE_NAME}
-    	BUNDLE DESTINATION ./install COMPONENT Runtime
-   	    RUNTIME DESTINATION ./install/bin COMPONENT Runtime
+     BUNDLE DESTINATION ./install COMPONENT Runtime
+        RUNTIME DESTINATION ./install/bin COMPONENT Runtime
     )
-	
+
     set(DEP_DIR "${CMAKE_BINARY_DIR}")  # where to look for dependencies when fixing up
-    INSTALL(CODE 
+    INSTALL(CODE
         "include(BundleUtilities)
         fixup_bundle(\"$<TARGET_BUNDLE_DIR:${EXECUTABLE_NAME}>\" \"\" \"${DEP_DIR}\")
-        " 
+        "
     )
     set(CPACK_GENERATOR "DragNDrop")
     include(CPack)
