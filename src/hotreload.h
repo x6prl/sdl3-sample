@@ -31,7 +31,8 @@ static bool hotreload(AppContext *ctx) {
 	static void *handle = nullptr;
 
 	constexpr const char kAndroidPackagedModuleName[] = "libapp_hotreload.so";
-	const bool explicit_path = std::strchr(HOTRELOAD_MODULE_PATH, '/') != nullptr;
+	const bool explicit_path =
+		  std::strchr(HOTRELOAD_MODULE_PATH, '/') != nullptr;
 	const char *load_path = HOTRELOAD_MODULE_PATH;
 
 	if (explicit_path) {
@@ -63,32 +64,21 @@ static bool hotreload(AppContext *ctx) {
 	}
 
 	printf("loading hotreload module: %s\t", load_path);
-	void *new_handle = dlopen(load_path, RTLD_NOW);
-	if (!new_handle) {
+	if (handle) {
+		dlclose(handle);
+	}
+	handle = dlopen(load_path, RTLD_NOW);
+	if (!handle) {
 		fprintf(stderr, "dlopen() failed: %s\n", dlerror());
 		return false;
 	}
 
-	auto new_ui_event = (ui_event_t)(dlsym(new_handle, "ui_event"));
-	if (!new_ui_event) {
-		fprintf(stderr, "error loading symbol: ui_event %s\n", dlerror());
-		dlclose(new_handle);
-		return false;
-	}
-
-	auto new_ui_iterate = (ui_iterate_t)(dlsym(new_handle, "ui_iterate"));
-	if (!new_ui_iterate) {
-		fprintf(stderr, "error loading symbol: ui_iterate %s\n", dlerror());
-		dlclose(new_handle);
-		return false;
-	}
-
-	if (handle != nullptr) {
-		dlclose(handle);
-	}
-	handle = new_handle;
-	ui_event = new_ui_event;
-	ui_iterate = new_ui_iterate;
+#define X(NAME, ARGS, RETURN_TYPE)                                             \
+	NAME = (NAME##_t)(dlsym(handle, #NAME));                                   \
+	if (!NAME)                                                                 \
+		fprintf(stderr, "dlsym() failed: %s\n", dlerror());
+	UI_ENTRY_FUNCTIONS
+#undef X
 
 	printf("DONE\n");
 	return true;
