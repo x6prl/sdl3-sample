@@ -40,7 +40,7 @@ static bool hotreload(const char *path) {
 	if (handle) {
 		dlclose(handle);
 	}
-	handle = dlopen(path, RTLD_NOW);
+	handle = dlopen(path, RTLD_LAZY);
 	if (!handle) {
 		fprintf(stderr, "dlopen() failed: %s\n", dlerror());
 		return false;
